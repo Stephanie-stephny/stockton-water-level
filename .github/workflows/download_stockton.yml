@@ -1,0 +1,53 @@
+name: Download Stockton Water Level Data
+
+on:
+  schedule:
+    - cron: "37 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stockton-water-level
+  cancel-in-progress: false
+
+jobs:
+  download-data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install requests
+      - name: Download Stockton data
+        id: download
+        continue-on-error: true
+        run: python download_stockton.py
+      - name: Save data and retry queue
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for file in Stockton_water_level.csv Stockton_failed_intervals.csv Stockton_download_state.json; do
+            if [ -f "$file" ]; then git add "$file"; fi
+          done
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Update Stockton water level data and retry queue"
+          for attempt in 1 2 3; do
+            git pull --rebase origin "$GITHUB_REF_NAME"
+            if git push origin "HEAD:$GITHUB_REF_NAME"; then exit 0; fi
+          done
+          exit 1
+      - name: Report incomplete download
+        if: steps.download.outcome == 'failure'
+        run: |
+          echo "Download failed or incomplete. Review download logs and Stockton_failed_intervals.csv."
+          exit 1
